@@ -41,7 +41,7 @@ Uses pyautogui to simulate keystrokes, injecting the transcribed text into which
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/voice-to-type.git
+   git clone https://github.com/gandhaarjoshi412/voice-to-type.git
    cd voice-to-type
    ```
 
