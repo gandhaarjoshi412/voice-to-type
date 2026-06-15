@@ -60,3 +60,6 @@ ehthumbs.db
 *.log
 *.tmp
 *.temp
+
+# ------ Application Data ------------------------------------
+data/

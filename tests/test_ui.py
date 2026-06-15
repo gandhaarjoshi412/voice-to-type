@@ -13,16 +13,33 @@ class FakeQWidget:
         self.setFixedSize = MagicMock()
         self.move = MagicMock()
         self.setLayout = MagicMock()
+        self.setGraphicsEffect = MagicMock()
+        self.update = MagicMock()
+        self.width = MagicMock(return_value=300)
+        self.height = MagicMock(return_value=100)
 
-class FakeQLabel(FakeQWidget):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.setText = MagicMock()
-        self.setAlignment = MagicMock()
+class FakeQGraphicsOpacityEffect(MagicMock):
+    def setOpacity(self, value):
+        pass
 
-class FakeQVBoxLayout:
+class FakeQPropertyAnimation(MagicMock):
     def __init__(self, *args, **kwargs):
-        self.addWidget = MagicMock()
+        super().__init__()
+        self.setDuration = MagicMock()
+        self.setStartValue = MagicMock()
+        self.setEndValue = MagicMock()
+        self.setEasingCurve = MagicMock()
+        self.start = MagicMock()
+        self.stop = MagicMock()
+        # Mock the finished signal connection
+        self.finished = MagicMock()
+
+class FakeQTimer(MagicMock):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self.start = MagicMock()
+        self.stop = MagicMock()
+        self.timeout = MagicMock()
 
 class FakePyQtSignal:
     def __init__(self, *args, **kwargs):
@@ -34,6 +51,8 @@ class TestGlassOverlay(unittest.TestCase):
         # Create a mock for PyQt6 and its submodules
         self.mock_qtcore = MagicMock()
         self.mock_qtcore.pyqtSignal = FakePyQtSignal
+        self.mock_qtcore.QTimer = FakeQTimer
+        self.mock_qtcore.QPropertyAnimation = FakeQPropertyAnimation
         self.mock_qtcore.Qt = MagicMock()
         self.mock_qtcore.Qt.WindowType.FramelessWindowHint = 1
         self.mock_qtcore.Qt.WindowType.WindowStaysOnTopHint = 2
@@ -43,8 +62,14 @@ class TestGlassOverlay(unittest.TestCase):
 
         self.mock_qtwidgets = MagicMock()
         self.mock_qtwidgets.QWidget = FakeQWidget
-        self.mock_qtwidgets.QLabel = FakeQLabel
-        self.mock_qtwidgets.QVBoxLayout = FakeQVBoxLayout
+        self.mock_qtwidgets.QGraphicsOpacityEffect = FakeQGraphicsOpacityEffect
+        # Mock QApplication so we can request primaryScreen geometry
+        mock_app = MagicMock()
+        mock_screen_geometry = MagicMock()
+        mock_screen_geometry.width.return_value = 1920
+        mock_screen_geometry.height.return_value = 1080
+        mock_app.primaryScreen.return_value.geometry.return_value = mock_screen_geometry
+        self.mock_qtwidgets.QApplication = mock_app
 
         self.mock_qtgui = MagicMock()
 
@@ -73,19 +98,14 @@ class TestGlassOverlay(unittest.TestCase):
         self.overlay.start_recording()
         
         self.assertEqual(self.overlay.state, "RECORDING")
-        self.overlay.label.setText.assert_called_with("● Recording...")
         self.overlay.show.assert_called_once()
         self.overlay.state_changed.emit.assert_called_with("RECORDING")
 
     def test_stop_recording(self):
-        # Set to recording first
         self.overlay.start_recording()
-        
         self.overlay.stop_recording()
         
         self.assertEqual(self.overlay.state, "IDLE")
-        self.overlay.label.setText.assert_called_with("Idle")
-        self.overlay.hide.assert_called_once()
         self.overlay.state_changed.emit.assert_called_with("IDLE")
 
 if __name__ == "__main__":

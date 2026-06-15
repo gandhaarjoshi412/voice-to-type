@@ -15,13 +15,16 @@ class Transcriber:
         
         self.client = Groq(api_key=self.api_key)
         self.model = "whisper-large-v3-turbo"
+        self.fallback_model = "whisper-large-v3"
 
-    def transcribe(self, audio_path: str) -> str:
+    def transcribe(self, audio_path: str, prompt: str = None) -> str:
         """
-        Transcribes an audio file using Groq's Whisper model.
+        Transcribes an audio file using Groq's Whisper model, with an optional context prompt.
         
         Args:
             audio_path (str): Path to the audio file.
+            prompt (str, optional): An optional text prompt to guide the style, spelling,
+                                   and syntax of the transcription.
             
         Returns:
             str: The transcribed text.
@@ -36,11 +39,23 @@ class Transcriber:
 
         try:
             with open(audio_path, "rb") as file:
-                transcription = self.client.audio.transcriptions.create(
-                    file=(os.path.basename(audio_path), file.read()),
-                    model=self.model,
-                    response_format="text"
-                )
+                audio_data = file.read()
+                
+            params = {
+                "file": (os.path.basename(audio_path), audio_data),
+                "model": self.model,
+                "response_format": "text"
+            }
+            if prompt:
+                params["prompt"] = prompt
+            
+            try:
+                transcription = self.client.audio.transcriptions.create(**params)
+            except Exception as first_error:
+                # Fallback to the non-turbo model if the first attempt fails
+                params["model"] = self.fallback_model
+                transcription = self.client.audio.transcriptions.create(**params)
+                
             return transcription
         except APIError as e:
             # Re-raise APIError to be handled by the caller

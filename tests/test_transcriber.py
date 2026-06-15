@@ -1,6 +1,18 @@
 import unittest
 from unittest.mock import MagicMock, patch, mock_open
 import os
+import sys
+
+# Workaround for Windows/Anaconda SSL DLL loading mismatch
+import ssl
+orig_create_default_context = ssl.create_default_context
+def dummy_create_default_context(*args, **kwargs):
+    try:
+        return orig_create_default_context(*args, **kwargs)
+    except Exception:
+        return MagicMock()
+ssl.create_default_context = dummy_create_default_context
+
 from src.core.transcriber import Transcriber
 from groq import APIError
 
@@ -8,7 +20,6 @@ class TestTranscriber(unittest.TestCase):
     def setUp(self):
         self.api_key = "test_api_key"
         self.audio_path = "/tmp/test_audio.wav"
-        # Patch os.environ to ensure GROQ_API_KEY is not accidentally used or required
         with patch.dict(os.environ, {}, clear=True):
             with patch('src.core.transcriber.Groq') as mock_groq:
                 self.transcriber = Transcriber(api_key=self.api_key)

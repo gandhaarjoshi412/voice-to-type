@@ -15,59 +15,74 @@ class TestRecorder(unittest.TestCase):
             os.remove(self.output_path)
 
     @patch('sounddevice.query_devices')
-    @patch('sounddevice.rec')
-    @patch('sounddevice.wait')
+    @patch('sounddevice.InputStream')
     @patch('sounddevice.default')
-    def test_record_success(self, mock_default, mock_wait, mock_rec, mock_query):
-        # Setup mocks
+    def test_start_recording_success(self, mock_default, mock_input_stream, mock_query):
+        """Test that start_recording successfully configures and starts the stream."""
         mock_query.return_value = [{'index': 0, 'max_input_channels': 1}]
         mock_default.device = [0]
         
-        duration = 1.0
-        expected_samples = int(duration * self.recorder.samplerate)
-        # Create a dummy mono signal (1D array)
-        dummy_data = np.random.uniform(-1, 1, expected_samples).astype('float32')
-        mock_rec.return_value = dummy_data
-
-        # Execute
-        self.recorder.record(self.output_path, duration)
-
-        # Verify file creation and properties
-        self.assertTrue(os.path.exists(self.output_path))
+        mock_stream = MagicMock()
+        mock_input_stream.return_value = mock_stream
         
-        sample_rate, data = wavfile.read(self.output_path)
+        self.recorder.start_recording()
         
-        # Verify sample rate
-        self.assertEqual(sample_rate, self.recorder.samplerate)
+        self.assertTrue(self.recorder.is_recording)
+        mock_input_stream.assert_called_once()
+        mock_stream.start.assert_called_once()
         
-        # Verify mono (data should be 1D)
-        self.assertEqual(len(data.shape), 1)
-        
-        # Verify duration (approximate)
-        self.assertAlmostEqual(len(data) / sample_rate, duration, delta=0.1)
+        # Cleanup
+        self.recorder.is_recording = False
+        self.recorder._stream = None
 
     @patch('sounddevice.query_devices')
-    def test_record_no_devices(self, mock_query):
-        # Mock no devices available
+    def test_start_recording_no_devices(self, mock_query):
+        """Test that start_recording raises RuntimeError when no audio devices are found."""
         mock_query.return_value = []
         
         with self.assertRaises(RuntimeError) as cm:
-            self.recorder.record(self.output_path, 1.0)
-        
+            self.recorder.start_recording()
+            
         self.assertEqual(str(cm.exception), "No audio devices found.")
+        self.assertFalse(self.recorder.is_recording)
 
     @patch('sounddevice.query_devices')
-    def test_record_no_input_devices(self, mock_query):
-        # Mock devices available but none have input channels
+    def test_start_recording_no_input_devices(self, mock_query):
+        """Test that start_recording raises RuntimeError when no input devices are found."""
         mock_query.return_value = [{'index': 0, 'max_input_channels': 0}]
         
-        # We also need to mock sd.default.device to be None to trigger the input_devices check
         with patch('sounddevice.default') as mock_default:
             mock_default.device = [None]
             with self.assertRaises(RuntimeError) as cm:
-                self.recorder.record(self.output_path, 1.0)
-            
+                self.recorder.start_recording()
+                
             self.assertEqual(str(cm.exception), "No audio input device found.")
+            self.assertFalse(self.recorder.is_recording)
+
+    @patch('src.core.recorder.wavfile.write')
+    def test_stop_recording_success(self, mock_wav_write):
+        """Test that stop_recording closes the stream and writes recorded data to a WAV file."""
+        mock_stream = MagicMock()
+        self.recorder._stream = mock_stream
+        self.recorder.is_recording = True
+        
+        # Place a dummy frame in the queue
+        dummy_frame = np.zeros((1024, 1), dtype=np.float32)
+        self.recorder.audio_queue.put(dummy_frame)
+        
+        self.recorder.stop_recording(self.output_path)
+        
+        self.assertFalse(self.recorder.is_recording)
+        mock_stream.stop.assert_called_once()
+        mock_stream.close.assert_called_once()
+        self.assertIsNone(self.recorder._stream)
+        
+        mock_wav_write.assert_called_once()
+        args, kwargs = mock_wav_write.call_args
+        self.assertEqual(args[0], self.output_path)
+        self.assertEqual(args[1], self.recorder.samplerate)
+        # Verify it concatenated queue contents
+        np.testing.assert_array_equal(args[2], dummy_frame)
 
 if __name__ == '__main__':
     unittest.main()

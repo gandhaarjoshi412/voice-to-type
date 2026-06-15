@@ -4,23 +4,28 @@ A background voice-to-text service that automatically types out speech in any ac
 
 ## Features
 
-* Global hotkey trigger: Start and stop recording from anywhere using Ctrl + Shift + Space.
-* Live visual feedback: A clean, translucent overlay appears at the bottom of the screen when recording, displaying a real-time waveform that reacts to input volume.
-* Keyboard simulation: The service types the transcribed text directly into the active text field.
-* Background execution: Runs in the background without stealing active window focus.
+* **Global hotkey trigger**: Start and stop recording from anywhere using a single hotkey (configured in `.env`, e.g., `Ctrl + Shift + Space`).
+* **Live visual feedback**: A sleek "Apple Liquid Glass" translucent overlay appears at the bottom of the screen when recording, displaying a real-time waveform that dynamically reacts to microphone volume.
+* **Instant Keyboard Injection**: Uses a fast clipboard-swap and paste action (`Ctrl+V` on Windows, `Cmd+V` on macOS) to insert transcribed text instantly, automatically preserving and restoring the user's original clipboard content immediately after.
+* **Keystroke Simulation Fallback**: Gracefully falls back to simulated character-by-character typing if the clipboard is restricted or fails.
+* **Context-Aware Transcriptions**: Automatically detects the active window application category (e.g., Cursor/VS Code, Slack/Discord, Command Prompt/PowerShell, Outlook/Gmail) and injects customized prompts to guide Whisper's formatting, slang, syntax, and jargon matching that application's style.
+* **Local Audio Backup (7-day Retention & 1GB Limit)**: Automatically saves every voice recording inside `data/audio_backup/`. Keeps a rolling 7-day backup of your voice files, automatically pruning older files or oldest items to guarantee audio storage does not exceed 1 GB.
+* **Custom SQLite History DB (14-day Retention)**: Stores all transcribed text, window titles, application names, timestamps, and audio links in a local SQLite database (`data/history.db`). Automatically deletes records older than 14 days on a rolling basis.
+* **Spotlight/Apple Finder-like Search UI**: Press a separate hotkey (`Ctrl + Shift + F` by default) to open a beautiful, translucent, drop-shadow history search panel. You can query your past transcriptions and play back the original voice files with the click of a button (if within the 7-day retention window).
+* **Background execution**: Runs silently in the background without stealing focus from the target window.
 
 ## Architecture and Components
 
 The codebase is split into modular components inside the src directory.
 
 ### 1. Service Orchestrator (src/main.py)
-VoiceToTypeService coordinates all other components. It listens for the toggle hotkey, starts and stops the recorder, manages threading for the transcription call to keep the UI responsive, and triggers the keyboard emulator when transcription is ready.
+VoiceToTypeService coordinates all other components. It listens for the toggle hotkey, starts and stops the recorder, manages threading for the transcription call to keep the UI responsive, triggers the keyboard emulator when transcription is ready, logs the text to the database, and schedules the cleanup operations.
 
 ### 2. Audio Recorder (src/core/recorder.py)
-Uses sounddevice to record mono audio from the default input device. It calculates the RMS (Root Mean Square) amplitude for each block of audio and passes it to the UI callback to animate the waveform. When stopped, it writes the recorded stream to a temporary WAV file.
+Uses sounddevice to record mono audio from the default input device. It calculates the RMS (Root Mean Square) amplitude for each block of audio and passes it to the UI callback to animate the waveform. When stopped, it writes the recorded stream to the designated audio backup path.
 
 ### 3. Hotkey Listener (src/service/listener.py)
-Uses pynput to register and monitor global keyboard inputs. It handles modifier keys and triggers the recording toggle when the registered hotkey is pressed.
+Uses pynput to register and monitor global keyboard inputs. It handles modifier keys and triggers the recording toggle and the search history panel.
 
 ### 4. Translucent Overlay (src/ui/overlay.py)
 A custom PyQt6 widget with frameless, translucent, and stay-on-top window flags. It paints a custom glass-like UI element with shadows and a 7-bar waveform. The bar heights are updated dynamically via Qt signals sent from the audio thread.
@@ -29,7 +34,13 @@ A custom PyQt6 widget with frameless, translucent, and stay-on-top window flags.
 A thin wrapper around the Groq Python client. It opens the recorded audio file and sends it to the whisper-large-v3-turbo model, returning the transcribed text.
 
 ### 6. Keyboard Typer (src/core/typer.py)
-Uses pyautogui to simulate keystrokes, injecting the transcribed text into whichever text box currently has focus.
+Performs high-speed text injection into the active window. It copies the text to the system clipboard, simulates a paste hotkey (`Ctrl+V` or `Cmd+V`), and instantly restores the original clipboard content. It automatically falls back to simulated character typing if clipboard interaction fails.
+
+### 7. Storage Manager (src/core/storage.py)
+Manages local SQLite connections, stores transcription text records, maps files, and enforces the rolling retention policy: 14 days for database records, 7 days for backup WAV files, and a hard 1 GB ceiling limit on audio storage size.
+
+### 8. Search History Finder (src/ui/finder.py)
+Implements the Apple-style Spotlight search bar window. Displays a queryable list of recent text transcriptions with context metadata and an audio player for listening to active backup files.
 
 ## Prerequisites
 
@@ -63,10 +74,11 @@ Uses pyautogui to simulate keystrokes, injecting the transcribed text into which
 
 4. Set up the environment variables:
    * Copy .env.example to .env
-   * Edit .env and enter your Groq API key and preferred hotkey:
+   * Edit .env and enter your Groq API key and preferred hotkeys:
      ```env
      GROQ_API_KEY=gsk_your_api_key_here
      HOTKEY=ctrl+shift+space
+     SEARCH_HOTKEY=ctrl+shift+f
      ```
 
 ## Usage
@@ -76,9 +88,8 @@ Start the service from the terminal:
 python src/main.py
 ```
 
-* Press Ctrl + Shift + Space to start recording. The translucent overlay will appear.
-* Speak clearly into your microphone.
-* Press Ctrl + Shift + Space again to stop recording. The overlay will close and the service will type the transcribed text.
+* **Dictation**: Press `Ctrl + Shift + Space` to start recording. Speak clearly, then press `Ctrl + Shift + Space` again to stop. The service automatically transcribes and types the text.
+* **History Search**: Press `Ctrl + Shift + F` to open the history search panel. Type queries to search past transcriptions, and click the **Play** button next to any item to listen to the recorded audio. Press `Esc` or the hotkey again to close the window.
 
 ## Auto-Startup Configuration
 

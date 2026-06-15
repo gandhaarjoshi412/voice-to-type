@@ -19,7 +19,7 @@ class HotkeyListener:
         self.listener = None
         self._thread = None
 
-    def start(self, callback=None):
+    def start(self, callback=None, search_callback=None):
         """
         Starts the hotkey listener in a background thread.
         """
@@ -28,21 +28,20 @@ class HotkeyListener:
             return
 
         try:
-            if callback:
-                import os
-                # Special keys recognised by pynput that require angle-bracket notation
-                SPECIAL_KEYS = {
-                    "ctrl", "alt", "shift", "cmd", "super", "win",
-                    "enter", "space", "tab", "backspace", "delete", "escape",
-                    "up", "down", "left", "right", "home", "end",
-                    "page_up", "page_down", "insert", "caps_lock", "num_lock",
-                    "scroll_lock", "print_screen", "pause", "menu",
-                    "f1","f2","f3","f4","f5","f6","f7","f8","f9","f10","f11","f12",
-                }
-                raw_hotkey = os.environ.get("HOTKEY", "ctrl+alt+v")
+            import os
+            # Special keys recognised by pynput that require angle-bracket notation
+            SPECIAL_KEYS = {
+                "ctrl", "alt", "shift", "cmd", "super", "win",
+                "enter", "space", "tab", "backspace", "delete", "escape",
+                "up", "down", "left", "right", "home", "end",
+                "page_up", "page_down", "insert", "caps_lock", "num_lock",
+                "scroll_lock", "print_screen", "pause", "menu",
+                "f1","f2","f3","f4","f5","f6","f7","f8","f9","f10","f11","f12",
+            }
+
+            def format_hotkey(raw_hotkey):
                 if not ("<" in raw_hotkey and ">" in raw_hotkey):
                     parts = raw_hotkey.split("+")
-                    # Only wrap keys that are special modifiers; leave bare characters as-is
                     formatted_parts = []
                     for part in parts:
                         key = part.strip().lower()
@@ -50,11 +49,20 @@ class HotkeyListener:
                             formatted_parts.append(f"<{key}>")
                         else:
                             formatted_parts.append(key)
-                    formatted_hotkey = "+".join(formatted_parts)
-                else:
-                    formatted_hotkey = raw_hotkey
+                    return "+".join(formatted_parts)
+                return raw_hotkey
+
+            if callback:
+                raw_hotkey = os.environ.get("HOTKEY", "ctrl+alt+v")
+                formatted_hotkey = format_hotkey(raw_hotkey)
                 self.hotkeys[formatted_hotkey] = callback
-                logger.info(f"Hotkey registered: {formatted_hotkey}")
+                logger.info(f"Main Hotkey registered: {formatted_hotkey}")
+
+            if search_callback:
+                raw_search_hotkey = os.environ.get("SEARCH_HOTKEY", "ctrl+shift+f")
+                formatted_search = format_hotkey(raw_search_hotkey)
+                self.hotkeys[formatted_search] = search_callback
+                logger.info(f"Search Hotkey registered: {formatted_search}")
 
             # GlobalHotKeys is a convenience wrapper for keyboard.Listener
             self.listener = keyboard.GlobalHotKeys(self.hotkeys)
