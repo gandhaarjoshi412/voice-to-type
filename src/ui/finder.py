@@ -85,7 +85,7 @@ class FinderWindow(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
-        self.setFixedSize(600, 450)
+        self.setFixedSize(780, 585)
         
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(20, 20, 20, 20)
