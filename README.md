@@ -78,7 +78,7 @@ Implements the Apple-style Spotlight search bar window. Displays a queryable lis
      ```env
      GROQ_API_KEY=gsk_your_api_key_here
      HOTKEY=ctrl+shift+space
-     SEARCH_HOTKEY=ctrl+shift+f
+     SEARCH_HOTKEY=ctrl+alt+f
      ```
 
 ## Usage
