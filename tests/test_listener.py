@@ -1,90 +1,120 @@
 import unittest
-from unittest.mock import MagicMock, patch
-import sys
+import os
+import tempfile
+import time
+from unittest.mock import MagicMock
+from src.service.listener import HotkeyListener
 
 class TestHotkeyListener(unittest.TestCase):
     def setUp(self):
-        # Create a fresh mock pynput
-        self.mock_pynput = MagicMock()
-        
-        # Start patching sys.modules
-        self.patcher = patch.dict('sys.modules', {
-            'pynput': self.mock_pynput,
-            'pynput.keyboard': self.mock_pynput.keyboard
-        })
-        self.patcher.start()
-        
-        # Force fresh import of the listener module
-        sys.modules.pop("src.service.listener", None)
-        from src.service.listener import HotkeyListener
-        
+        # Create a temp directory for the test named pipe
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.pipe_path = os.path.join(self.temp_dir.name, "test_pipe")
         self.mock_callback = MagicMock()
-        self.hotkeys = {'<ctrl>+<shift>+v': self.mock_callback}
-        self.listener = HotkeyListener(self.hotkeys)
+        self.mock_search_callback = MagicMock()
+        self.mock_dashboard_callback = MagicMock()
+        self.mock_quit_callback = MagicMock()
+        self.listener = HotkeyListener(pipe_path=self.pipe_path)
 
     def tearDown(self):
-        self.patcher.stop()
-
-    @patch('src.service.listener.keyboard.GlobalHotKeys')
-    @patch('src.service.listener.threading.Thread')
-    def test_start_success(self, mock_thread, mock_global_hotkeys):
-        """Test that start() correctly initializes and starts the listener thread."""
-        # Setup mocks
-        mock_listener_instance = mock_global_hotkeys.return_value
-        
-        self.listener.start()
-        
-        # Verify GlobalHotKeys was called with correct hotkeys
-        mock_global_hotkeys.assert_called_once_with(self.hotkeys)
-        
-        # Verify Thread was started with the listener's start method
-        mock_thread.assert_called_once()
-        args, kwargs = mock_thread.call_args
-        self.assertEqual(kwargs['target'], mock_listener_instance.start)
-        self.assertTrue(kwargs['daemon'])
-        
-        # Verify thread was actually started
-        mock_thread.return_value.start.assert_called_once()
-
-    @patch('src.service.listener.keyboard.GlobalHotKeys')
-    def test_start_failure(self, mock_global_hotkeys):
-        """Test that start() handles exceptions during initialization."""
-        mock_global_hotkeys.side_effect = Exception("Initialization failed")
-        
-        with self.assertRaises(Exception) as context:
-            self.listener.start()
-        
-        self.assertTrue("Initialization failed" in str(context.exception))
-        self.assertIsNone(self.listener.listener)
-
-    @patch('src.service.listener.keyboard.GlobalHotKeys')
-    @patch('src.service.listener.threading.Thread')
-    def test_stop(self, mock_thread, mock_global_hotkeys):
-        """Test that stop() correctly stops the listener."""
-        mock_listener_instance = mock_global_hotkeys.return_value
-        self.listener.start()
-        
         self.listener.stop()
-        
-        mock_listener_instance.stop.assert_called_once()
-        self.assertIsNone(self.listener.listener)
+        self.temp_dir.cleanup()
 
-    @patch('src.service.listener.keyboard.GlobalHotKeys')
-    @patch('src.service.listener.threading.Thread')
-    def test_callback_execution(self, mock_thread, mock_global_hotkeys):
-        """
-        Test that the callback is executed when the hotkey is triggered.
-        """
-        self.listener.start()
-        
-        # Get the hotkeys passed to GlobalHotKeys
-        called_hotkeys = mock_global_hotkeys.call_args[0][0]
-        
-        # Simulate the trigger by calling the callback associated with the hotkey
-        hotkey = '<ctrl>+<shift>+v'
-        called_hotkeys[hotkey]()
-        
+    def test_start_creates_pipe(self):
+        """Test that start() correctly creates the pipe file."""
+        self.assertFalse(os.path.exists(self.pipe_path))
+        self.listener.start(
+            callback=self.mock_callback,
+            search_callback=self.mock_search_callback,
+            dashboard_callback=self.mock_dashboard_callback,
+            quit_callback=self.mock_quit_callback
+        )
+        self.assertTrue(os.path.exists(self.pipe_path))
+        self.assertTrue(self.listener.running)
+
+    def test_trigger_callback(self):
+        """Test that writing 'TRIGGER' to the pipe executes the callback."""
+        self.listener.start(
+            callback=self.mock_callback,
+            search_callback=self.mock_search_callback,
+            dashboard_callback=self.mock_dashboard_callback,
+            quit_callback=self.mock_quit_callback
+        )
+
+        # Write to pipe (blocks until read loop opens it)
+        with open(self.pipe_path, 'w') as f:
+            f.write("TRIGGER")
+
+        # Allow minor propagation delay
+        time.sleep(0.1)
         self.mock_callback.assert_called_once()
+        self.mock_search_callback.assert_not_called()
+        self.mock_dashboard_callback.assert_not_called()
+        self.mock_quit_callback.assert_not_called()
+
+    def test_search_callback(self):
+        """Test that writing 'SEARCH' to the pipe executes the search callback."""
+        self.listener.start(
+            callback=self.mock_callback,
+            search_callback=self.mock_search_callback,
+            dashboard_callback=self.mock_dashboard_callback,
+            quit_callback=self.mock_quit_callback
+        )
+
+        with open(self.pipe_path, 'w') as f:
+            f.write("SEARCH")
+
+        time.sleep(0.1)
+        self.mock_search_callback.assert_called_once()
+        self.mock_callback.assert_not_called()
+        self.mock_dashboard_callback.assert_not_called()
+        self.mock_quit_callback.assert_not_called()
+
+    def test_dashboard_callback(self):
+        """Test that writing 'DASHBOARD' to the pipe executes the dashboard callback."""
+        self.listener.start(
+            callback=self.mock_callback,
+            search_callback=self.mock_search_callback,
+            dashboard_callback=self.mock_dashboard_callback,
+            quit_callback=self.mock_quit_callback
+        )
+
+        with open(self.pipe_path, 'w') as f:
+            f.write("DASHBOARD")
+
+        time.sleep(0.1)
+        self.mock_dashboard_callback.assert_called_once()
+        self.mock_callback.assert_not_called()
+        self.mock_search_callback.assert_not_called()
+        self.mock_quit_callback.assert_not_called()
+
+    def test_quit_callback_and_graceful_stop(self):
+        """Test that writing 'QUIT' triggers the quit callback and terminates the listener thread."""
+        self.listener.start(
+            callback=self.mock_callback,
+            search_callback=self.mock_search_callback,
+            quit_callback=self.mock_quit_callback
+        )
+
+        with open(self.pipe_path, 'w') as f:
+            f.write("QUIT")
+
+        time.sleep(0.1)
+        self.mock_quit_callback.assert_called_once()
+        self.assertFalse(self.listener.running)
+        self.assertFalse(os.path.exists(self.pipe_path))
+
+    def test_stop_deletes_pipe(self):
+        """Test that calling stop() manually removes the pipe file."""
+        self.listener.start(
+            callback=self.mock_callback,
+            search_callback=self.mock_search_callback,
+            quit_callback=self.mock_quit_callback
+        )
+        self.assertTrue(os.path.exists(self.pipe_path))
+        self.listener.stop()
+        self.assertFalse(os.path.exists(self.pipe_path))
+        self.assertFalse(self.listener.running)
 
 if __name__ == '__main__':
     unittest.main()

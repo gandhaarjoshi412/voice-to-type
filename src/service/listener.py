@@ -1,89 +1,130 @@
 import logging
-from pynput import keyboard
+import os
 import threading
+import time
 
 logger = logging.getLogger(__name__)
 
 class HotkeyListener:
     """
-    A class to listen for global hotkeys and execute corresponding callback functions.
+    A class that sets up a Named Pipe (FIFO) to listen for control triggers
+    and execute corresponding callback functions, replacing raw global keyboard hooks.
     """
-    def __init__(self, hotkeys: dict = None):
-        """
-        Initialize the HotkeyListener.
-
-        :param hotkeys: A dictionary where keys are hotkey strings (e.g., '<ctrl>+<shift>+v')
-                        and values are callable functions to execute when the hotkey is pressed.
-        """
-        self.hotkeys = hotkeys or {}
-        self.listener = None
+    def __init__(self, pipe_path: str = "/tmp/antigravity_pipe"):
+        self.pipe_path = os.path.abspath(pipe_path)
+        self.running = False
         self._thread = None
+        self.callback = None
+        self.search_callback = None
+        self.dashboard_callback = None
+        self.quit_callback = None
 
-    def start(self, callback=None, search_callback=None):
+    def start(self, callback=None, search_callback=None, quit_callback=None, dashboard_callback=None):
         """
-        Starts the hotkey listener in a background thread.
+        Starts the pipe listener in a background thread.
         """
-        if self.listener:
-            logger.warning("HotkeyListener is already running.")
+        if self.running:
+            logger.warning("Pipe listener is already running.")
             return
 
+        self.callback = callback
+        self.search_callback = search_callback
+        self.dashboard_callback = dashboard_callback
+        self.quit_callback = quit_callback
+        self.running = True
+
+        # Clean up any stale pipe
+        if os.path.exists(self.pipe_path):
+            try:
+                os.remove(self.pipe_path)
+                logger.info(f"Removed stale pipe at {self.pipe_path}")
+            except Exception as e:
+                logger.error(f"Failed to remove stale pipe {self.pipe_path}: {e}")
+                raise e
+
+        # Create new Named Pipe (FIFO)
         try:
-            import os
-            # Special keys recognised by pynput that require angle-bracket notation
-            SPECIAL_KEYS = {
-                "ctrl", "alt", "shift", "cmd", "super", "win",
-                "enter", "space", "tab", "backspace", "delete", "escape",
-                "up", "down", "left", "right", "home", "end",
-                "page_up", "page_down", "insert", "caps_lock", "num_lock",
-                "scroll_lock", "print_screen", "pause", "menu",
-                "f1","f2","f3","f4","f5","f6","f7","f8","f9","f10","f11","f12",
-            }
-
-            def format_hotkey(raw_hotkey):
-                if not ("<" in raw_hotkey and ">" in raw_hotkey):
-                    parts = raw_hotkey.split("+")
-                    formatted_parts = []
-                    for part in parts:
-                        key = part.strip().lower()
-                        if key in SPECIAL_KEYS:
-                            formatted_parts.append(f"<{key}>")
-                        else:
-                            formatted_parts.append(key)
-                    return "+".join(formatted_parts)
-                return raw_hotkey
-
-            if callback:
-                raw_hotkey = os.environ.get("HOTKEY", "ctrl+alt+v")
-                formatted_hotkey = format_hotkey(raw_hotkey)
-                self.hotkeys[formatted_hotkey] = callback
-                logger.info(f"Main Hotkey registered: {formatted_hotkey}")
-
-            if search_callback:
-                raw_search_hotkey = os.environ.get("SEARCH_HOTKEY", "ctrl+shift+f")
-                formatted_search = format_hotkey(raw_search_hotkey)
-                self.hotkeys[formatted_search] = search_callback
-                logger.info(f"Search Hotkey registered: {formatted_search}")
-
-            # GlobalHotKeys is a convenience wrapper for keyboard.Listener
-            self.listener = keyboard.GlobalHotKeys(self.hotkeys)
-            
-            # Start the listener in a separate thread so it doesn't block the main application
-            self._thread = threading.Thread(target=self.listener.start, daemon=True)
-            self._thread.start()
-            logger.info("HotkeyListener started successfully.")
+            os.mkfifo(self.pipe_path)
+            # Ensure the pipe is writable by trigger scripts run under other user contexts if needed
+            os.chmod(self.pipe_path, 0o666)
+            logger.info(f"Created named pipe (FIFO) at {self.pipe_path}")
         except Exception as e:
-            logger.error(f"Failed to start HotkeyListener: {e}")
-            self.listener = None
-            self._thread = None
+            logger.error(f"Failed to create named pipe at {self.pipe_path}: {e}")
+            self.running = False
             raise e
+
+        # Start the background thread for blocking reads
+        self._thread = threading.Thread(target=self._listen_loop, daemon=True)
+        self._thread.start()
+        logger.info("Pipe listener thread started successfully.")
+
+    def _listen_loop(self):
+        """
+        Main loop running in a background thread. Blocks waiting to read from the pipe.
+        """
+        while self.running:
+            try:
+                # opening the pipe for reading blocks until a writer opens it
+                # We open in read mode ('r'). We wrap it in a try-except to handle exits
+                if not os.path.exists(self.pipe_path):
+                    if not self.running:
+                        break
+                    # If pipe was deleted but we are still running, recreate it
+                    try:
+                        os.mkfifo(self.pipe_path)
+                        os.chmod(self.pipe_path, 0o666)
+                    except Exception:
+                        pass
+                    time.sleep(0.5)
+                    continue
+
+                with open(self.pipe_path, 'r') as fifo:
+                    data = fifo.read().strip()
+
+                if not data:
+                    # Writer closed the pipe without writing or sent EOF
+                    # Sleep briefly to avoid busy loop if writer keeps opening/closing quickly
+                    time.sleep(0.1)
+                    continue
+
+                logger.info(f"Received command from pipe: {data}")
+
+                if data == "TRIGGER":
+                    if self.callback:
+                        self.callback()
+                elif data == "SEARCH":
+                    if self.search_callback:
+                        self.search_callback()
+                elif data == "DASHBOARD":
+                    if self.dashboard_callback:
+                        self.dashboard_callback()
+                elif data == "QUIT":
+                    if self.quit_callback:
+                        self.quit_callback()
+                    # Break loop on quit
+                    break
+            except Exception as e:
+                if self.running:
+                    logger.error(f"Error in pipe listener loop: {e}")
+                    time.sleep(0.5)
+
+        # Ensure cleanup if we exited the loop
+        self.stop()
 
     def stop(self):
         """
-        Stops the hotkey listener.
+        Stops the listener loop and deletes the pipe file.
         """
-        if self.listener:
-            self.listener.stop()
-            self.listener = None
-            logger.info("HotkeyListener stopped.")
-        else:
-            logger.warning("HotkeyListener is not running.")
+        if not self.running:
+            return
+
+        self.running = False
+        logger.info("Stopping pipe listener...")
+
+        # Delete the pipe file
+        if os.path.exists(self.pipe_path):
+            try:
+                os.remove(self.pipe_path)
+                logger.info(f"Deleted pipe file at {self.pipe_path}")
+            except Exception as e:
+                logger.error(f"Failed to delete pipe file {self.pipe_path}: {e}")

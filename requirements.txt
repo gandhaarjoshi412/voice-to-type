@@ -2,7 +2,6 @@ sounddevice
 scipy
 groq
 pyautogui
-pynput
 PyQt6
 python-dotenv
 numpy

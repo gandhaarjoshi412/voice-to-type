@@ -6,6 +6,11 @@ from src.core.typer import Typer
 class TestTyper(unittest.TestCase):
     def setUp(self):
         self.typer = Typer()
+        self._env_patcher = patch.dict('os.environ', {'WAYLAND_DISPLAY': ''})
+        self._env_patcher.start()
+
+    def tearDown(self):
+        self._env_patcher.stop()
 
     @patch('src.core.typer.get_clipboard_text')
     @patch('src.core.typer.set_clipboard_text')

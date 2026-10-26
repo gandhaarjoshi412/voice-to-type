@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 import time
 import subprocess
@@ -113,6 +114,11 @@ elif sys.platform == "darwin":
 
 else:  # Linux
     def get_clipboard_text() -> str:
+        if os.environ.get("WAYLAND_DISPLAY"):
+            try:
+                return subprocess.check_output(["wl-paste"], text=True)
+            except Exception:
+                pass
         try:
             return subprocess.check_output(["xclip", "-selection", "clipboard", "-o"], text=True)
         except Exception:
@@ -122,6 +128,14 @@ else:  # Linux
                 return ""
                 
     def set_clipboard_text(text: str) -> bool:
+        if os.environ.get("WAYLAND_DISPLAY"):
+            try:
+                p = subprocess.Popen(["wl-copy"], stdin=subprocess.PIPE, text=True)
+                p.communicate(input=text)
+                if p.returncode == 0:
+                    return True
+            except Exception:
+                pass
         try:
             p = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE, text=True)
             p.communicate(input=text)
@@ -137,6 +151,25 @@ else:  # Linux
             return False
 
 
+def _find_xdisplay() -> str:
+    """Find an active XWayland display to use with xdotool."""
+    import glob
+    sockets = sorted(glob.glob("/tmp/.X11-unix/X*"))
+    for sock in sockets:
+        display = ":" + sock.replace("/tmp/.X11-unix/X", "")
+        try:
+            result = subprocess.run(
+                ["xdotool", "getactivewindow"],
+                env={**os.environ, "DISPLAY": display},
+                capture_output=True, timeout=1
+            )
+            if result.returncode == 0:
+                return display
+        except Exception:
+            continue
+    return ":0"  # default fallback
+
+
 class Typer:
     """
     Handles text injection into the active window using a fast clipboard paste method,
@@ -146,53 +179,78 @@ class Typer:
     def type_text(self, text: str) -> bool:
         """
         Injects the text into the active window.
-        Attempts to paste from clipboard, falling back to pyautogui typing if unsuccessful.
-        
-        Args:
-            text (str): The text to inject.
-            
-        Returns:
-            bool: True if text was injected successfully, False otherwise.
+        On GNOME Wayland: wl-copy to clipboard, then ydotool key 29:1 47:1 47:0 29:0
+        On other platforms: clipboard + Ctrl+V via pyautogui.
         """
         if not text:
-            logger.debug("No text provided to inject.")
             return True
 
-        # Try clipboard paste first for speed and accuracy
-        try:
-            # 1. Save original clipboard text
-            orig_text = get_clipboard_text()
-            
-            # 2. Write new text to clipboard
+        is_wayland = bool(os.environ.get("WAYLAND_DISPLAY"))
+
+        # ── Wayland (GNOME) path ──────────────────────────────────────────────
+        if is_wayland and sys.platform != "darwin":
+            print("[Typer] Using Wayland ydotool strategy.")
             if set_clipboard_text(text):
-                # Simulate paste key combination
+                time.sleep(0.25)
+                try:
+                    ydotool_env = os.environ.copy()
+                    ydotool_env["YDOTOOL_SOCKET"] = "/tmp/.ydotool_socket"
+                    # ydotool uses kernel-level scancodes. 29 = Left Ctrl, 47 = V
+                    subprocess.run(
+                        ["ydotool", "key", "-d", "20", "29:1", "47:1", "47:0", "29:0"],
+                        env=ydotool_env, check=True, timeout=3
+                    )
+                    print("[Typer] Text pasted via wl-copy + ydotool (Ctrl+V).")
+                    return True
+                except Exception as e:
+                    print(f"[Typer] ydotool paste failed: {e}. Trying ydotool type...")
+                    try:
+                        subprocess.run(
+                            ["ydotool", "type", text],
+                            env=ydotool_env, check=True, timeout=10
+                        )
+                        print("[Typer] Text typed via ydotool type.")
+                        return True
+                    except Exception as e2:
+                        print(f"[Typer] ydotool type also failed: {e2}")
+                        print("\n=== WAYLAND DAEMON REQUIRED ===")
+                        print("On GNOME Wayland, you MUST run the ydotoold daemon for auto-typing.")
+                        print("Run this command in a new terminal and leave it running:")
+                        print("    sudo ydotoold -p /tmp/.ydotool_socket -P 0666")
+                        print("===============================\n")
+                        print(f"[Typer] Text copied to clipboard — press Ctrl+V to paste: {text[:40]}...")
+                        return False
+            else:
+                print("[Typer] ERROR: wl-copy failed — cannot put text on clipboard.")
+                return False
+
+        # ── macOS / X11 Linux / Windows path ──────────────────────────────────
+        try:
+            orig_text = get_clipboard_text()
+
+            if set_clipboard_text(text):
                 import pyautogui
+                time.sleep(0.1)
                 if sys.platform == "darwin":
                     pyautogui.hotkey("command", "v")
                 else:
                     pyautogui.hotkey("ctrl", "v")
-                
-                # Yield execution thread briefly for OS to process the paste event
-                # Increased to 0.3s to prevent race condition where target app pastes original clipboard contents
                 time.sleep(0.3)
-                
-                # 4. Restore original clipboard text
                 if orig_text is not None:
                     set_clipboard_text(orig_text)
-                
-                logger.info("Text pasted successfully via clipboard.")
+                print("[Typer] Text pasted successfully via clipboard & pyautogui.")
                 return True
             else:
-                logger.warning("Clipboard write failed. Falling back to typing simulation.")
+                print("[Typer] Clipboard write failed. Falling back to typing simulation.")
         except Exception as e:
-            logger.error(f"Clipboard paste operation failed: {e}. Falling back to typing simulation.")
+            print(f"[Typer] Clipboard paste failed: {e}. Falling back to typing simulation.")
 
-        # Fallback to simulated character-by-character typing
+        # Fallback: character-by-character typing
         try:
             import pyautogui
             pyautogui.write(text, interval=0.01)
-            logger.info("Text typed successfully via simulated keystrokes.")
+            print("[Typer] Text typed successfully via simulated keystrokes.")
             return True
         except Exception as e:
-            logger.error(f"Keystroke simulation fallback failed: {e}")
+            print(f"[Typer] Keystroke simulation fallback failed: {e}")
             return False
